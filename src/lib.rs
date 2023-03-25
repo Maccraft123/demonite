@@ -12,6 +12,10 @@ pub enum DemoniteErr {
     Io(String),
     #[error("Environment Variable Error: {0}")]
     EnvVar(String),
+    #[error("XDG_RUNTIME_DIR has invalid permissions. expected 0700 found {0:o}")]
+    XdgRuntimeDirInvPerm(u32),
+    #[error("XDG_RUNTIME_DIR does not exist")]
+    XdgRuntimeDirMissing,
 }
 
 // Eh... those errors don't have Serialize implemented.
@@ -51,10 +55,17 @@ macro_rules! decl_service {
                     }
                 }
                 pub fn path() -> Result<std::path::PathBuf, demonite::DemoniteErr> {
-                    let mut path = std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR")?);
-                    path.push("demonite");
+                    let mut path = Self::demonite_dir()?;
                     path.push(stringify!($name));
                     Ok(path)
+                }
+                fn demonite_dir() -> Result<std::path::PathBuf, demonite::DemoniteErr> {
+                    let mut path = Self::xdg_runtime_dir()?;
+                    path.push("demonite");
+                    Ok(path)
+                }
+                fn xdg_runtime_dir() -> Result<std::path::PathBuf, demonite::DemoniteErr> {
+                    Ok(std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR")?))
                 }
                 pub(crate) fn launch() -> Result<(), demonite::DemoniteErr> {
                     use std::{
@@ -62,17 +73,36 @@ macro_rules! decl_service {
                         fs,
                         path::PathBuf,
                         io::Write,
-                        os::unix::net::{UnixStream, UnixListener},
+                        os::unix::{
+                            net::{UnixStream, UnixListener},
+                            fs::PermissionsExt,
+                        },
                     };
                     use ::demonite::bincode;
 
-                    if !Self::path()?.parent().unwrap().exists() {
-                        fs::create_dir(Self::path()?.parent().unwrap())?;
+                    let path = Self::path()?;
+
+                    // Ensure XDG_RUNTIME_DIR is up to spec
+                    if !Self::xdg_runtime_dir()?.exists() {
+                        return Err(demonite::DemoniteErr::XdgRuntimeDirMissing);
                     }
-                    if Self::path()?.exists() {
-                        fs::remove_file(Self::path()?)?;
+
+                    let perms = fs::metadata(Self::xdg_runtime_dir()?)?.permissions();
+                    let mode = perms.mode() & 0o7777;
+                    if mode != 0o0700 {
+                        return Err(demonite::DemoniteErr::XdgRuntimeDirInvPerm(mode));
                     }
-                    let sock = UnixListener::bind(Self::path()?)?;
+
+                    if !Self::demonite_dir()?.exists() {
+                        std::fs::create_dir(Self::demonite_dir()?)?;
+                    }
+
+                    if path.exists() {
+                        // TODO: what should we do about this case?
+                        fs::remove_file(&path)?;
+                    }
+
+                    let sock = UnixListener::bind(&path)?;
                     ::demonite::libdogd::log_info(format!("Listening on {:?}", sock.local_addr()));
                     for stream in sock.incoming() {
                         if let Ok(mut s) = stream {
