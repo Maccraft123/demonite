@@ -16,6 +16,8 @@ pub enum DemoniteErr {
     XdgRuntimeDirInvPerm(u32),
     #[error("XDG_RUNTIME_DIR does not exist")]
     XdgRuntimeDirMissing,
+    #[error("An instance of service with the same name is already running")]
+    AlreadyRunning,
 }
 
 // Eh... those errors don't have Serialize implemented.
@@ -98,8 +100,17 @@ macro_rules! decl_service {
                     }
 
                     if path.exists() {
-                        // TODO: what should we do about this case?
-                        fs::remove_file(&path)?;
+                        match UnixStream::connect(&path) {
+                            Ok(_) => return Err(demonite::DemoniteErr::AlreadyRunning),
+                            Err(e) => {
+                                if e.kind() == std::io::ErrorKind::ConnectionRefused {
+                                    fs::remove_file(&path)?;
+                                } else {
+                                    // erm... not sure what to do here...
+                                    return Err(demonite::DemoniteErr::Io(e.to_string()));
+                                }
+                            },
+                        }
                     }
 
                     let sock = UnixListener::bind(&path)?;
