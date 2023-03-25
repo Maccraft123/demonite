@@ -11,3 +11,4 @@ libdogd = { git = "https://github.com/R-ARM/dogd.git", version = "0.2.0" }
 paste = "1.0.12"
 postcard = { version = "1.0.4", features = ["use-std"] }
 serde = { version = "1.0.154", features = ["derive"] }
+thiserror = "1.0.40"
