@@ -103,45 +103,54 @@ macro_rules! decl_service {
                         match UnixStream::connect(&path) {
                             Ok(_) => return Err(demonite::DemoniteErr::AlreadyRunning),
                             Err(e) => {
-                                if e.kind() == std::io::ErrorKind::ConnectionRefused {
-                                    fs::remove_file(&path)?;
-                                } else {
-                                    // erm... not sure what to do here...
-                                    return Err(demonite::DemoniteErr::Io(e.to_string()));
+                                use std::io::ErrorKind;
+
+                                // erm... not sure what to do here... so far manual handling of
+                                // errors i've seen when testing
+                                match e.kind() {
+                                    ErrorKind::ConnectionRefused => fs::remove_file(&path)?,
+                                    // Note: if this happens the other side might be in invalid
+                                    // state
+                                    ErrorKind::AddrInUse => return Err(demonite::DemoniteErr::AlreadyRunning),
+                                    _ => return Err(demonite::DemoniteErr::Io(e.to_string())),
                                 }
                             },
                         }
                     }
 
-                    let sock = UnixListener::bind(&path)?;
-                    ::demonite::libdogd::log_info(format!("Listening on {:?}", sock.local_addr()));
-                    for stream in sock.incoming() {
-                        if let Ok(mut s) = stream {
-                            let variant = match bincode::deserialize_from::<&UnixStream, Self>(&s) {
-                                Ok(v) => v,
-                                Err(e) => {
-                                    ::demonite::libdogd::log_error(format!("Failed deserializing packet: {}", e));
-                                    continue;
-                                },
-                            };
-                            ::demonite::libdogd::log_debug(format!("Method call: {:?}", &variant));
-                            let response = match variant.run() {
-                                Ok(r) => r,
-                                Err(e) => {
-                                    ::demonite::libdogd::log_error(format!("Failed serializing response: {}", e));
-                                    bincode::serialize(&demonite::DemoniteErr::Serialize(e.to_string()))
-                                        .unwrap() // is it really going to never fail
-                                },
-                            };
-                            match s.write_all(&response) {
-                                Ok(_) => (),
-                                Err(e) => {
-                                    ::demonite::libdogd::log_error(format!("Failed to write response: {}", e));
-                                },
+                    ::demonite::libdogd::log_info(format!("Listening on {}", &path.display()));
+                    loop {
+                        let sock = UnixListener::bind(&path)?;
+                        for stream in sock.incoming() {
+                            if let Ok(mut s) = stream {
+                                let variant = match bincode::deserialize_from::<&UnixStream, Self>(&s) {
+                                    Ok(v) => v,
+                                    Err(e) => {
+                                        ::demonite::libdogd::log_error(format!("Failed deserializing packet: {}", e));
+                                        break; // Bincode doc says the reader might be in invalid
+                                               // state. Should re-start listening just in case
+                                    },
+                                };
+                                ::demonite::libdogd::log_debug(format!("Method call: {:?}", &variant));
+                                let response = match variant.run() {
+                                    Ok(r) => r,
+                                    Err(e) => {
+                                        ::demonite::libdogd::log_error(format!("Failed serializing response: {}", e));
+                                        bincode::serialize(&demonite::DemoniteErr::Serialize(e.to_string()))
+                                            .unwrap() // is it really going to never fail
+                                    },
+                                };
+                                match s.write_all(&response) {
+                                    Ok(_) => (),
+                                    Err(e) => {
+                                        ::demonite::libdogd::log_error(format!("Failed to write response: {}", e));
+                                    },
+                                }
                             }
                         }
+                        drop(sock);
+                        fs::remove_file(&path)?;
                     }
-                    Ok(())
                 }
                 $(
                     pub fn $fn($($arg: $ty),*) -> Result<$ret, demonite::DemoniteErr> {
