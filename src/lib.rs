@@ -123,33 +123,38 @@ macro_rules! decl_service {
                         let sock = UnixListener::bind(&path)?;
                         for stream in sock.incoming() {
                             if let Ok(mut s) = stream {
-                                let variant = match bincode::deserialize_from::<&UnixStream, Self>(&s) {
-                                    Ok(v) => v,
-                                    Err(e) => {
-                                        ::demonite::libdogd::log_error(format!("Failed deserializing packet: {}", e));
-                                        break; // Bincode doc says the reader might be in invalid
-                                               // state. Should re-start listening just in case
-                                    },
-                                };
-                                ::demonite::libdogd::log_debug(format!("Method call: {:?}", &variant));
-                                let response = match variant.run() {
-                                    Ok(r) => r,
-                                    Err(e) => {
-                                        ::demonite::libdogd::log_error(format!("Failed serializing response: {}", e));
-                                        bincode::serialize(&demonite::DemoniteErr::Serialize(e.to_string()))
-                                            .unwrap() // is it really going to never fail
-                                    },
-                                };
-                                match s.write_all(&response) {
-                                    Ok(_) => (),
-                                    Err(e) => {
-                                        ::demonite::libdogd::log_error(format!("Failed to write response: {}", e));
-                                    },
-                                }
+                                std::thread::spawn(|| Self::handle_client(s));
                             }
                         }
                         drop(sock);
                         fs::remove_file(&path)?;
+                    }
+                }
+                fn handle_client(mut s: std::os::unix::net::UnixStream) {
+                    use ::demonite::bincode;
+                    use std::os::unix::net::UnixStream;
+                    use std::io::Write;
+                    let variant = match bincode::deserialize_from::<&UnixStream, Self>(&s) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            ::demonite::libdogd::log_error(format!("Failed deserializing packet: {}", e));
+                            return;
+                        },
+                    };
+                    ::demonite::libdogd::log_debug(format!("Method call: {:?}", &variant));
+                    let response = match variant.run() {
+                        Ok(r) => r,
+                        Err(e) => {
+                            ::demonite::libdogd::log_error(format!("Failed serializing response: {}", e));
+                            bincode::serialize(&demonite::DemoniteErr::Serialize(e.to_string()))
+                                .unwrap() // is it really going to never fail
+                        },
+                    };
+                    match s.write_all(&response) {
+                        Ok(_) => (),
+                        Err(e) => {
+                            ::demonite::libdogd::log_error(format!("Failed to write response: {}", e));
+                        },
                     }
                 }
                 $(
