@@ -50,12 +50,14 @@ macro_rules! decl_service {
             }
 
             impl $name {
+                #[inline]
                 pub(crate) fn run(self) -> Result<Vec<u8>, demonite::DemoniteErr> {
                     match self {
                         $($name::[<_ $fn>]($($arg),*) => 
                           Ok(::demonite::bincode::serialize(& $fn( $($arg),* ) )?)),*
                     }
                 }
+                #[inline]
                 pub fn path() -> Result<std::path::PathBuf, demonite::DemoniteErr> {
                     let mut path = Self::demonite_dir()?;
                     path.push(stringify!($name));
@@ -69,6 +71,7 @@ macro_rules! decl_service {
                 fn xdg_runtime_dir() -> Result<std::path::PathBuf, demonite::DemoniteErr> {
                     Ok(std::path::PathBuf::from(std::env::var("XDG_RUNTIME_DIR")?))
                 }
+                #[inline]
                 pub(crate) fn launch() -> Result<(), demonite::DemoniteErr> {
                     use std::{
                         env,
@@ -158,6 +161,7 @@ macro_rules! decl_service {
                     }
                 }
                 $(
+                    #[inline]
                     pub fn $fn($($arg: $ty),*) -> Result<$ret, demonite::DemoniteErr> {
                         use ::demonite::bincode;
                         use ::std::os::unix::net::UnixStream;
